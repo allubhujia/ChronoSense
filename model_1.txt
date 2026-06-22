@@ -1,0 +1,24 @@
+A numpy .bin parser for the ChronoSense FMCW dataset (TI IWR6843ISK + DCA1000EVM). I derived the exact format from DataSetDescription&ParametersSetting.pdf and confirmed it against the file sizes:
+
+1200 frames × 3 TX × 4 RX × 200 ADC samples × 2 (I+Q) × 2 bytes = 11,520,000 bytes ✓
+
+The files use TI's standard DCA1000 2-lane complex layout — every 4 int16 ([I0,I1,Q0,Q1]) decode to two complex samples — the same format as TI's reference readDCA1000.m, but fully vectorized.
+
+Public API
+parse_bin(path, params=None, strict=False) → complex64 cube of shape (frames, chirps, rx, adc). Frame count is inferred from actual file size, so truncated captures (like test 6) just yield fewer frames with a warning instead of crashing.
+read_dca1000(path, params=None) → (num_rx, total_samples) per-RX streams, matching the TI reference output shape.
+parse_filename(path) → decodes bandwidth / position / test from adc_<BW>_position<P>_ (<N>).bin.
+range_fft(cube, window=True) → convenience Hann-windowed range FFT.
+RadarParams dataclass holds the geometry (defaults = ChronoSense config) so you can override for other captures.
+CLI
+
+python fmcw_bin_parser.py "adc_3GHZ_position1_ (1).bin"
+prints shape, bandwidth, duration, and a sample slice.
+
+Verified
+Full file → (1200, 3, 4, 200), 60.00 s ✓
+Truncated test 6 → recovers 1104 frames cleanly with a dropped-samples notice ✓
+ADC values within int16 range; range-FFT produces a clear peak bin ✓
+Note: there's an empty placeholder file1 already in that folder (the one open in your IDE) — I left it untouched and created the properly-named module instead. Want me to delete file1, or add a small demo/plotting script that runs the range-FFT and a slow-time (vital-sign) FFT end-to-end?
+
+python fmcw_bin_parser.py "..\FMCW radar-based multi-person vital sign monitoring data\1_AsymmetricalPosition\1_Radar_Raw_Data\position_ (1)\adc_3GHZ_position1_ (1).bin"
