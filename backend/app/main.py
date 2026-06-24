@@ -11,12 +11,12 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from . import crud
 from .database import close_mongo_connection, connect_to_mongo
-from .schemas import WSCommand, WSResponse
+from .schemas import Label, Pair, RadarCapture, WSCommand, WSResponse
 
 
 # ── App lifespan: open/close Mongo with the server ──────────────────────────
@@ -41,20 +41,28 @@ async def root() -> dict:
     return {"service": "ChronoSense Backend", "status": "ok"}
 
 
-@app.get("/captures")
+# `response_model=...` makes FastAPI validate and serialise each response through
+# the Pydantic schema. If a stored document doesn't match the schema, FastAPI
+# raises a server-side validation error — so these routes also exercise Pydantic.
+@app.get("/captures", response_model=list[RadarCapture])
 async def http_list_captures(limit: int = 20):
     return await crud.list_captures(limit)
 
 
-@app.get("/labels")
+@app.get("/labels", response_model=list[Label])
 async def http_list_labels(limit: int = 20):
     return await crud.list_labels(limit)
 
 
-@app.get("/pair")
+@app.get("/pair", response_model=Pair)
 async def http_get_pair(radar_npy: str):
     pair = await crud.get_pair(radar_npy)
-    return pair or {"error": f"No radar capture with npy_path={radar_npy!r}"}
+    if pair is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No radar capture with npy_path={radar_npy!r}",
+        )
+    return pair
 
 
 # ── WebSocket endpoint ──────────────────────────────────────────────────────
