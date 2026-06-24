@@ -38,9 +38,7 @@ Usage (library)::
     from fmcw_bin_parser import parse_bin, RadarParams
     cube = parse_bin("adc_3GHZ_position1_ (1).bin")      # (frames, chirps, rx, samples)
 
-Usage (CLI)::
 
-    python fmcw_bin_parser.py "adc_3GHZ_position1_ (1).bin"
 """
 
 from __future__ import annotations
@@ -107,7 +105,7 @@ def parse_filename(path: str | Path) -> FileInfo | None:
     """
     name = Path(path).name
     m = re.match(
-        r"adc_(?P<bw>2GHZ|2_5GHZ|3GHZ)_position(?P<pos>\d+)_\s*\((?P<test>\d+)\)\.bin",
+        r"adc_(?P<bw>2GHZ|2_5GHZ|3GHZ)_positi?on(?P<pos>\d+)_\s*\((?P<test>\d+)\)\.bin",
         name,
         re.IGNORECASE,
     )
@@ -120,22 +118,6 @@ def parse_filename(path: str | Path) -> FileInfo | None:
         position=int(m.group("pos")),
         test=int(m.group("test")),
     )
-
-
-def read_dca1000(path: str | Path, params: RadarParams | None = None) -> np.ndarray:
-    """Decode a DCA1000 .bin file into per-RX complex sample streams.
-
-    Vectorised equivalent of TI's reference ``readDCA1000.m`` for the 2-lane
-    complex format. The returned array has shape
-    ``(num_rx, total_samples_per_rx)`` with dtype ``complex64``: row ``r`` is
-    RX antenna ``r``'s samples, concatenated across every chirp of the capture.
-
-    For a shaped (frames, chirps, rx, adc) cube use :func:`parse_bin` instead.
-    """
-    params = params or RadarParams()
-    cube = parse_bin(path, params)
-    # (frames, chirps, rx, adc) -> (rx, frames*chirps*adc)
-    return np.moveaxis(cube, 2, 0).reshape(params.num_rx, -1)
 
 
 def parse_bin(
@@ -220,40 +202,3 @@ def range_fft(cube: np.ndarray, window: bool = True) -> np.ndarray:
         x = cube * w
     return np.fft.fft(x, axis=-1)
 
-
-def _summarise(path: Path, params: RadarParams) -> None:
-    info = parse_filename(path)
-    cube = parse_bin(path, params)
-    print(f"file            : {path.name}")
-    if info is not None:
-        print(f"bandwidth       : {info.bandwidth_hz / 1e9:g} GHz")
-        print(f"position / test : {info.position} / {info.test}")
-    print(f"cube shape      : {cube.shape}  (frames, chirps, rx, adc)")
-    print(f"dtype           : {cube.dtype}")
-    duration = cube.shape[0] * params.frame_period
-    print(f"duration        : {duration:.2f} s ({cube.shape[0]} frames)")
-    print(f"|amplitude| mean : {np.abs(cube).mean():.2f}")
-    print(f"sample [f0,c0,rx0,:5] : {cube[0, 0, 0, :5]}")
-
-
-if __name__ == "__main__":
-    import argparse
-
-    ap = argparse.ArgumentParser(description="Parse ChronoSense FMCW radar .bin files.")
-    ap.add_argument("bin", type=Path, nargs="+", help="path(s) to adc_*.bin file(s)")
-    ap.add_argument("--adc-samples", type=int, default=200)
-    ap.add_argument("--rx", type=int, default=4)
-    ap.add_argument("--tx", type=int, default=3)
-    ap.add_argument("--chirp-loops", type=int, default=1)
-    args = ap.parse_args()
-
-    p = RadarParams(
-        num_adc_samples=args.adc_samples,
-        num_rx=args.rx,
-        num_tx=args.tx,
-        chirp_loops=args.chirp_loops,
-    )
-    for i, b in enumerate(args.bin):
-        if i:
-            print("-" * 48)
-        _summarise(b, p)

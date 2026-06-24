@@ -1,19 +1,51 @@
 # ──────────────────────────────────────────────
 # Python caches / bytecode
 # ──────────────────────────────────────────────
-
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # ──────────────────────────────────────────────
 # Virtual environments
 # ──────────────────────────────────────────────
 .venv/
 venv/
+env/
 
 # ──────────────────────────────────────────────
-# Datasets (download separately — see README)
+# Secrets / local config
 # ──────────────────────────────────────────────
-FMCW_dataset
-FMCW_dataset
+# Never commit real connection strings / credentials.
+# The committed template is .env.example (kept in git on purpose).
+.env
+*.env
+!.env.example
+backend/.env
+
+# ──────────────────────────────────────────────
+# Datasets & processed artifacts (download/generate separately — see README)
+# ──────────────────────────────────────────────
+FMCW_dataset/
+# Large binary array dumps, in case any land outside FMCW_dataset/
+*.bin
+*.npy
+*.npz
+
+# ──────────────────────────────────────────────
+# Editor / OS clutter
+# ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ──────────────────────────────────────────────
+# Logs
+# ──────────────────────────────────────────────
+*.log
