@@ -1,9 +1,9 @@
 # ChronoSense
 
-**Contactless vital-sign monitoring from FMCW radar.**
-A pipeline that turns raw 60 GHz radar captures into model-ready inputs (**X**) and
-extracts ground-truth heart rate from reference ECG/PCG signals (**Y**), then serves
-the whole dataset through a FastAPI + WebSocket backend backed by MongoDB.
+**Contactless dual-subject vital-sign monitoring from FMCW radar.**
+A pipeline that turns each raw 60 GHz radar `.bin` capture directly into the
+**respiration and heartbeat** of the (up to two) people in front of the radar —
+using only the radar signal. No body-worn sensors, no reference logs.
 
 ---
 
@@ -36,35 +36,35 @@ the whole dataset through a FastAPI + WebSocket backend backed by MongoDB.
 ## 📡 What this project does
 
 The dataset is *FMCW radar-based multi-person vital sign monitoring data*, captured with a
-**TI IWR6843ISK (60 GHz)** radar + **DCA1000EVM** capture card. While a person sits in front
-of the radar, two things are recorded simultaneously:
+**TI IWR6843ISK (60 GHz)** radar + **DCA1000EVM** capture card. Two people sit in front of the
+radar; their chests move with breathing (large, ~mm) and heartbeats (tiny, ~0.1 mm), and the
+radar captures these micro-movements wirelessly in the raw `.bin` ADC samples.
 
-- **Radar `.bin`** — raw ADC samples. The chest moves with breathing (large) and heartbeats
-  (tiny); the radar captures these micro-movements wirelessly. → **Input features (X)**
-- **Log `.csv`** — reference **ECG** (electrical) and **PCG** (heart-sound) waveforms from
-  body-worn sensors, recorded at the same time. → **Ground-truth labels (Y)**
-
-The goal is supervised learning: feed the radar signal in, predict the vital signs, and use the
-ECG-derived heart rate as the answer key.
+This pipeline extracts each person's **respiration** and **heartbeat** straight from that radar
+signal. The reference ECG/PCG `.csv` logs in the dataset are **not used** — the whole point is
+contactless estimation.
 
 ```
-   Radar (contactless)            Body sensors (reference)
-   ┌────────────────┐             ┌────────────────────┐
-   │  adc_*.bin (X) │             │  log_*.csv (ECG/PCG)│  (Y)
-   └───────┬────────┘             └─────────┬──────────┘
-           │ batch_process.py               │ log_process.py
-           ▼                                 ▼
-   .npy radar cube + .json          .npz (ecg,pcg,hr) + .json
-   (1200,3,4,200)                   per-second heart rate
-           │                                 │
-           └──────────── index.json / log_index.json ───────────┐
-                                                                 ▼
-                                                    ingest.py → MongoDB
-                                                                 ▼
-                                              FastAPI + WebSocket backend
-                                                                 ▼
-                                                     client / edge device
+   Radar (contactless, dual-subject)
+   ┌─────────────────────┐
+   │  adc_*.bin  (raw I/Q)│
+   └──────────┬──────────┘
+              │ batch_process.py → vital_signs.py
+              ▼
+   MTI + range-FFT → MVDR DOA → top-2 targets → beamform
+              │
+              ▼  phase → unwrap → diff → band-pass
+   per subject:  respiration (0.1–0.6 Hz)   heartbeat (0.9–2.0 Hz)
+              │
+              ▼
+   <stem>.json  (rates, geometry, SNR, previews)
+   <stem>.npz   (full-resolution waveforms)
+   vitals_index.json  (master summary of all captures)
 ```
+
+The DSP is a NumPy port of the dataset authors' own MATLAB reference
+(`FMCW_dataset/Code_for_Processing/`: `Main.m`, `MTI.m`, `IWR6843ISK_DOA.m`,
+`get_heartBreath_rate.m`, `RR_BPF20.m`, `HR_BPF20.m`).
 
 ---
 
@@ -72,29 +72,22 @@ ECG-derived heart rate as the answer key.
 
 ```
 ChronoSense/
-├── digital_processing/         # signal processing (X and Y generation)
+├── digital_processing/         # radar-only vital-sign extraction
 │   ├── fmcw_bin_parser.py      # raw radar .bin → complex64 cube
-│   ├── batch_process.py        # all radar .bin → .npy + .json + index.json
-│   └── log_process.py          # all ECG/PCG .csv → .npz + .json + log_index.json
+│   ├── vital_signs.py          # cube → per-subject respiration & heartbeat (the DSP)
+│   └── batch_process.py        # all radar .bin → .json + .npz + vitals_index.json
 │
 ├── FMCW_dataset/               # (git-ignored — large) raw + processed data
-│   ├── 1_AsymmetricalPosition/ # raw radar .bin + log .csv
-│   ├── 2_SymmetricalPosition/  # (two people per capture: Target1 + Target2)
+│   ├── 1_AsymmetricalPosition/ # raw radar .bin (two people per capture)
+│   ├── 2_SymmetricalPosition/  # Target1 + Target2
+│   ├── Code_for_Processing/    # the authors' reference MATLAB (ported here)
 │   └── Processed_Data/
-│       ├── index.json          # catalog of 162 radar captures
-│       └── log_index.json      # catalog of 324 labels
+│       ├── <category>/position_*/<stem>.json   # per-capture vital signs
+│       ├── <category>/position_*/<stem>.npz    # per-capture waveforms
+│       └── vitals_index.json                   # master summary (162 captures)
 │
-├── backend/                    # FastAPI + Pydantic + WebSocket + MongoDB
-│   ├── app/
-│   │   ├── config.py           # typed settings (Mongo URI, collections)
-│   │   ├── database.py         # async Mongo connection (Motor)
-│   │   ├── schemas.py          # Pydantic models: documents + WS messages
-│   │   ├── crud.py             # DB query helpers
-│   │   ├── ingest.py           # load the two index JSONs into MongoDB
-│   │   └── main.py             # FastAPI app: REST + WebSocket
-│   ├── client/ws_client.py     # demo WebSocket client
-│   ├── requirements.txt
-│   └── .env.example
+├── backend/                    # legacy FastAPI + MongoDB browsing layer (not used
+│                               #   by the radar-only pipeline; kept for reference)
 │
 └── README.md
 ```
@@ -114,110 +107,103 @@ against the file geometry:
 `parse_bin()` returns a `complex64` cube of shape **(frames, chirps, rx, adc_samples)**, inferring
 the frame count from the real file size so truncated captures degrade gracefully instead of crashing.
 
+### Vital-sign extraction — `vital_signs.py`
+The core DSP. For one capture (slow-time rate = 1/50 ms = **20 Hz**, 60 s):
+1. **Virtual array** — keep TX1 + TX3 → 8 virtual RX channels.
+2. **MTI + range-FFT** — mean-cancel the slow-time DC/clutter, then 256-pt range-FFT.
+3. **MVDR DOA** — per range bin, build the Capon range-angle spectrum.
+4. **Find subjects** — greedily pick the **top-2** range-angle peaks (the two people),
+   suppressing a neighbourhood so they're genuinely distinct.
+5. **Beamform** — MVDR weights at each target's (range, angle) → one complex slow-time signal.
+6. **Phase → vital signs** — `angle → unwrap → diff`, then band-pass into
+   **respiration (0.1–0.6 Hz)** and **heartbeat (0.9–2.0 Hz)**; the FFT peak in each band gives
+   the rate (×60 → per minute).
+
+> Band-pass is a zero-phase FFT mask (no SciPy needed) standing in for the reference
+> Butterworth filters; equivalent for in-band rate estimation.
+
 ### Radar batch — `batch_process.py`
 Walks every radar `.bin` and writes, per file:
-- **`.npy`** — the full complex radar cube `(1200, 3, 4, 200)`
-- **`.json`** — metadata + amplitude statistics
-- plus a master **`index.json`** → **162 captures**
-
-### Label extraction — `log_process.py`
-For every ECG/PCG `.csv` (~125 Hz, 60 s):
-1. Detects ECG **R-peaks** with a pure-NumPy Pan–Tompkins-style pipeline
-   (baseline removal → derivative → squaring → moving-window integration → adaptive peak pick).
-2. Converts R-R intervals into a **per-second heart-rate series**.
-3. Writes per file:
-   - **`.npz`** — three arrays: `ecg`, `pcg` (raw waveforms) and `hr_per_second` (the label)
-   - **`.json`** — HR summary, signal stats, and the **matched radar `.npy`** (X↔Y link)
-   - plus a master **`log_index.json`** → **324 labels**
-
-> Note: both CSV channels are cardiac (ECG + PCG). Heart rate is the ground truth here;
-> respiration is captured only on the radar side.
+- **`.json`** — per-subject breathing & heart rate, detection geometry (range, angle), in-band
+  SNR, and a per-second waveform preview.
+- **`.npz`** — full-resolution waveforms: `subjectN_target_complex`, `subjectN_phase_unwrapped`,
+  `subjectN_phase_diff`, `subjectN_respiration`, `subjectN_heartbeat`, plus `time_s`.
+- plus a master **`vitals_index.json`** summarising all **162 captures**.
 
 ---
 
 ## 🗂️ 2. Data formats
 
-| | Radar input (X) | Label (Y) |
-|--|-----------------|-----------|
-| Source | `adc_*.bin` | `log_*.csv` (ECG + PCG) |
-| Array file | `.npy` cube `(1200,3,4,200)` | `.npz` → `ecg`, `pcg`, `hr_per_second` |
-| Metadata | `.json` (config + stats) | `.json` (HR summary + stats) |
-| Catalog | `index.json` (162) | `log_index.json` (324) |
-| Link | — | `matched_radar_npy` → the paired radar `.npy` |
+Per capture, two files (heavy waveforms in the `.npz`, everything human-readable in the `.json`):
 
-The big arrays stay on disk; MongoDB stores the JSON catalogs (with paths to the arrays).
-One radar capture pairs with **two** labels in the symmetrical case (Target1 + Target2).
+| | Per-capture JSON | Per-capture NPZ |
+|--|------------------|------------------|
+| Source | `adc_*.bin` (radar only) | `adc_*.bin` (radar only) |
+| Holds | rates, range/angle, SNR, per-second previews | full-res waveforms per subject |
+| Subjects | up to **2** (`subjects[]`) | `subject1_*`, `subject2_*` arrays |
+| Catalog | — | — |
 
----
-
-## 🚀 3. Backend (FastAPI + Pydantic + WebSocket + MongoDB)
-
-The backend reads the dataset catalog from MongoDB and serves it over HTTP and a WebSocket.
-It does **not** re-parse raw files — the processing scripts already did that.
-
-**WebSocket actions** (`ws://localhost:8000/ws`) — each client message is validated by the
-`WSCommand` Pydantic model; replies use a `WSResponse` envelope `{type, data, error}`:
-
-| `action` | Returns |
-|----------|---------|
-| `ping` | `pong` |
-| `list_captures` | radar captures (X) |
-| `list_labels` | labels (Y) |
-| `get_pair` | one radar capture **+ its labels** (X↔Y) |
-
-> The same socket is the seam where a future **edge device pushes live data into the backend**.
+Master catalog: **`vitals_index.json`** (one entry per capture, with each subject's
+breathing/heart rate and geometry). One capture yields **two** subjects (Target1 + Target2).
 
 ---
 
 ## ⚙️ Setup & run
 
-> Environment: Python runs via **WSL2 + venv** (CPU-only). Activate with
-> `source .venv/bin/activate`.
+> Environment: Python runs via **WSL2 + venv** (CPU-only, NumPy only — no SciPy).
+> Activate with `source .venv/bin/activate`.
 
-**1. Generate the processed data** (radar + labels):
+**Generate the vital-sign data** from every radar `.bin`:
 ```bash
 cd digital_processing
-python batch_process.py     # → .npy/.json + index.json (162)
-python log_process.py       # → .npz/.json + log_index.json (324)
+python batch_process.py        # → <stem>.json + <stem>.npz + vitals_index.json (162)
 ```
 
-**2. Start MongoDB** (installed once in WSL):
+**Inspect a single capture** (prints detected subjects and their rates):
 ```bash
-sudo systemctl start mongod
-sudo systemctl status mongod      # expect "active (running)"
+python vital_signs.py "../FMCW_dataset/1_AsymmetricalPosition/1_Radar_Raw_Data/position_ (1)/adc_3GHZ_position1_ (1).bin"
 ```
 
-**3. Load the dataset into MongoDB:**
+Outputs land in `FMCW_dataset/Processed_Data/`, mirroring the dataset's
+`<category>/position_*/` layout, plus a top-level `vitals_index.json` summary.
+
+---
+
+## 🚀 3. Backend (FastAPI + Pydantic + WebSocket + MongoDB)
+
+The `backend/` folder serves the vital-sign captures from MongoDB over HTTP and a WebSocket.
+It reads the per-capture JSONs (one document per `.bin`, both subjects' respiration + heartbeat)
+— it does **not** re-parse radar files.
+
 ```bash
 cd backend
 pip install -r requirements.txt
-cp .env.example .env              # adjust MONGO_URI if needed
-python -m app.ingest              # 162 radar + 324 labels (idempotent)
-```
-
-**4. Run the backend:**
-```bash
+cp .env.example .env          # adjust MONGO_URI if needed
+python -m app.ingest          # load Processed_Data/**/*.json → captures collection (162)
 uvicorn app.main:app --reload --port 8000
-# REST docs:  http://localhost:8000/docs
-# WebSocket:  ws://localhost:8000/ws
-python client/ws_client.py        # demo client (separate terminal)
+python client/ws_client.py    # demo client (separate terminal)
 ```
 
-**Viewing the data:** connect MongoDB Compass / the VS Code extension to the database
-(`mongodb://localhost:27017`, or the WSL IP from `hostname -I` if on localhost can't reach WSL)
-and open the **`chronosense`** database → `radar_captures` + `labels`.
+**WebSocket actions** (`ws://localhost:8000/ws`) — each reply is a `WSResponse` `{type, data, error}`:
+
+| `action` | Returns |
+|----------|---------|
+| `ping` | `pong` |
+| `summary` | dataset-wide rate statistics |
+| `list_captures` | captures (optional `category` filter) |
+| `get_capture` | one capture by `source_file` (both subjects' vitals) |
+
+REST mirrors this: `/captures`, `/captures/{source_file}`, `/summary`, and docs at `/docs`.
 
 ---
 
 ## ✅ Status
 
 - [x] Radar `.bin` parser (verified against dataset geometry)
-- [x] Radar batch processing → `.npy` + `.json` + `index.json` (162)
-- [x] ECG/PCG heart-rate extraction → `.npz` + `.json` + `log_index.json` (324)
-- [x] X↔Y pairing (robust to misspelled source filenames)
-- [x] MongoDB ingestion (idempotent upserts + indexes)
-- [x] FastAPI + Pydantic + WebSocket backend
-- [ ] Edge → backend live ingest handler
-- [ ] Vital-sign model (radar X → heart rate Y)
-- [ ] Frontend dashboard client
+- [x] Radar-only vital-sign DSP — MTI → range-FFT → MVDR DOA → beamform → phase band-pass
+- [x] Dual-subject detection (top-2 range-angle peaks)
+- [x] Respiration (0.1–0.6 Hz) + heartbeat (0.9–2.0 Hz) per subject
+- [x] Batch processing → `.json` + `.npz` + `vitals_index.json` (162 captures)
+- [ ] Validate radar rates against the dataset's ECG/PCG references
+- [ ] Vital-sign dashboard / live edge ingest
 ```
