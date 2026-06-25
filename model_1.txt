@@ -27,3 +27,10 @@ python fmcw_bin_parser.py "..\FMCW radar-based multi-person vital sign monitorin
 #---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 to check whether the mongod is running or not -> sudo systemctl status mongod
+
+If you are using systemctl (Modern WSL2):
+# Restart the MongoDB service
+sudo systemctl restart mongod
+
+# (Optional) Verify it is running again
+sudo systemctl status mongod
