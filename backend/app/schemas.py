@@ -1,9 +1,10 @@
 """Pydantic models (schemas).
 
 Two groups:
-  1. Document schemas  - mirror the JSON written by the processing pipeline
-                         (radar index.json and log_index.json). They validate
-                         what we read out of MongoDB before sending it on.
+  1. Document schemas  - mirror the per-capture vital-sign JSON written by
+                         digital_processing/batch_process.py (radar-only
+                         respiration + heartbeat for up to two subjects). They
+                         validate what we read out of MongoDB before serving it.
   2. WebSocket schemas - the request the client sends and the envelope the
                          server replies with over the socket.
 """
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. Document schemas (radar capture = X, label = Y)
+# 1. Document schemas (one processed radar .bin capture)
 # ─────────────────────────────────────────────────────────────────────────────
 class RadarConfig(BaseModel):
     start_freq_ghz: float
@@ -26,90 +27,69 @@ class RadarConfig(BaseModel):
     tx_antennas: int
     chirp_loops_per_frame: int
     frame_period_ms: float
+    slowtime_fs_hz: float
+    range_resolution_m: float
 
 
-class RadarStatistics(BaseModel):
-    amplitude_mean: float
-    amplitude_std: float
-    amplitude_min: float
-    amplitude_max: float
-    per_frame_amplitude_mean: list[float]
-    per_rx_amplitude_mean: list[float]
-    per_chirp_amplitude_mean: list[float]
-    first_5_samples_real: list[float]
-    first_5_samples_imag: list[float]
+class Detection(BaseModel):
+    """Where in the scene the subject was located (range bin + MVDR angle)."""
+
+    range_bin: int
+    range_m: float
+    angle_deg: float
 
 
-class RadarCapture(BaseModel):
-    """One processed radar .bin capture (the model input, X)."""
+class Respiration(BaseModel):
+    """The subject's breathing, extracted from the radar phase (0.1-0.6 Hz)."""
+
+    breathing_rate_bpm: int
+    peak_freq_hz: float
+    band_hz: list[float]
+    snr_db: float
+    waveform_npz_key: str
+    waveform_samples: list[float] = Field(default_factory=list)  # full bandpassed waveform (~1199 samples at 20 Hz)
+    per_second_preview: list[float]     # 60-value per-second average for quick display
+
+
+class Heartbeat(BaseModel):
+    """The subject's heartbeat, extracted from the radar phase (0.9-2.0 Hz)."""
+
+    heart_rate_bpm: int
+    peak_freq_hz: float
+    band_hz: list[float]
+    snr_db: float
+    waveform_npz_key: str
+    waveform_samples: list[float] = Field(default_factory=list)  # full bandpassed waveform (~1199 samples at 20 Hz)
+    per_second_preview: list[float]     # 60-value per-second average for quick display
+
+
+class Subject(BaseModel):
+    """One detected person: where they are + their two vital signs."""
+
+    subject_index: int
+    detection: Detection
+    respiration: Respiration
+    heartbeat: Heartbeat
+
+
+class Capture(BaseModel):
+    """One processed radar .bin capture, with both subjects' vital signs."""
 
     source_file: str
     category: str
-    position: int
-    test: int
-    bandwidth_ghz: float | None = None
+    position: int | None = None
+    test: int | None = None
+    bandwidth_ghz: float
     bandwidth_token: str | None = None
-    npy_path: str
-    json_path: str | None = None
+    modality: str
+    vital_signs: list[str]
     radar_config: RadarConfig
-    cube_shape: list[int]
-    cube_shape_labels: list[str]
     frames: int
     duration_s: float
-    statistics: RadarStatistics
-
-
-class LogConfig(BaseModel):
-    sampling_rate_hz: float
-    channels: list[str]
-    n_samples: int
-    duration_s: float
-
-
-class ArraySpec(BaseModel):
-    shape: list[int]
-    dtype: str
-    sampling_rate_hz: float
-    units: str
-    derived_from: str | None = None
-
-
-class HRSummary(BaseModel):
-    hr_mean_bpm: float | None = None
-    hr_std_bpm: float | None = None
-    hr_min_bpm: float | None = None
-    hr_max_bpm: float | None = None
-
-
-class Label(BaseModel):
-    """One processed ECG/PCG log = the ground-truth label, Y."""
-
-    source_file: str
-    category: str
-    position: int
-    test: int
-    target: int
-    bandwidth_ghz: float | None = None
-    bandwidth_token: str | None = None
-    role: str
-    label_npz_path: str
-    label_json_path: str
-    matched_radar_npy: str
-    matched_radar_resolved: bool
-    log_config: LogConfig
-    arrays: dict[str, ArraySpec]
-    num_beats_detected: int
-    hr_summary: HRSummary
-    hr_per_second_bpm: list[float | None]
-    ecg_stats: dict[str, float]
-    pcg_stats: dict[str, float]
-
-
-class Pair(BaseModel):
-    """A radar capture (X) together with every label (Y) recorded for it."""
-
-    radar: RadarCapture
-    labels: list[Label]
+    num_subjects_detected: int
+    subjects: list[Subject]
+    npz_path: str
+    json_path: str
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -117,9 +97,9 @@ class Pair(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 WSAction = Literal[
     "ping",            # health check
-    "list_captures",   # list radar captures (X)
-    "list_labels",     # list labels (Y)
-    "get_pair",        # one radar capture + its labels (X <-> Y)
+    "list_captures",   # list captures (optionally filtered by category)
+    "get_capture",     # one capture by its source_file
+    "summary",         # dataset-wide vital-sign statistics
 ]
 
 
@@ -129,8 +109,10 @@ class WSCommand(BaseModel):
     action: WSAction
     limit: int = Field(default=20, ge=1, le=500)
 
-    # get_pair: identify the radar capture by its .npy path.
-    radar_npy: str | None = None
+    # list_captures: optional category filter.
+    category: str | None = None
+    # get_capture: identify the capture by its source .bin file name.
+    source_file: str | None = None
 
 
 class WSResponse(BaseModel):

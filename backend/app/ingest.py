@@ -1,10 +1,16 @@
-"""Load the processed dataset's two index JSON files into MongoDB.
+"""Load the processed vital-sign JSONs into MongoDB.
 
-  Processed_Data/index.json      -> radar_captures collection (X)
-  Processed_Data/log_index.json  -> labels collection         (Y)
+The radar pipeline (digital_processing/batch_process.py) writes one JSON per
+`.bin` capture under Processed_Data/, each holding both subjects' respiration
+and heartbeat. This script walks those files and upserts them into the
+`captures` collection.
 
-Idempotent: re-running upserts on a stable key, so it will not create
-duplicates. Run it once before starting the server.
+  Processed_Data/**/<stem>.json   -> captures collection
+
+The master Processed_Data/vitals_index.json is skipped (it's only a summary;
+the per-capture files hold the full data).
+
+Idempotent: re-running upserts on json_path, so it will not create duplicates.
 
 Usage (from the backend/ folder):
     python -m app.ingest
@@ -21,12 +27,21 @@ from pymongo import MongoClient, UpdateOne
 
 from .config import settings
 
+_PROCESSED_DIR_NAME = "Processed_Data"
+_INDEX_FILENAME = "vitals_index.json"
 
-def _load_index(path: Path) -> list[dict]:
-    if not path.is_file():
-        raise FileNotFoundError(f"Index file not found: {path}")
-    with open(path, encoding="utf-8") as f:
-        return json.load(f).get("files", [])
+
+def _load_capture_jsons(processed: Path) -> list[dict]:
+    """Read every per-capture JSON under Processed_Data/ (skipping the index)."""
+    if not processed.is_dir():
+        raise FileNotFoundError(f"Processed data folder not found: {processed}")
+    docs: list[dict] = []
+    for path in sorted(processed.rglob("*.json")):
+        if path.name == _INDEX_FILENAME:
+            continue
+        with open(path, encoding="utf-8") as f:
+            docs.append(json.load(f))
+    return docs
 
 
 def _upsert(collection, docs: list[dict], key: str) -> int:
@@ -40,9 +55,7 @@ def _upsert(collection, docs: list[dict], key: str) -> int:
 
 def ingest(dataset_root: str | Path | None = None) -> None:
     root = Path(dataset_root or settings.dataset_root).resolve()
-    processed = root / "Processed_Data"
-    radar_index = processed / "index.json"
-    label_index = processed / "log_index.json"
+    processed = root / _PROCESSED_DIR_NAME
 
     print(f"Dataset root : {root}")
     print(f"Mongo URI    : {settings.mongo_uri}")
@@ -50,30 +63,25 @@ def ingest(dataset_root: str | Path | None = None) -> None:
 
     client = MongoClient(settings.mongo_uri)
     db = client[settings.mongo_db]
+    coll = db[settings.capture_collection]
 
-    radar_docs = _load_index(radar_index)
-    label_docs = _load_index(label_index)
+    docs = _load_capture_jsons(processed)
+    # json_path is unique per capture; source_file is too, but json_path is the
+    # safest stable key (it encodes category + position + stem).
+    n = _upsert(coll, docs, key="json_path")
 
-    # Unique keys = the file paths, which are guaranteed distinct per document.
-    n_radar = _upsert(db[settings.radar_collection], radar_docs, key="npy_path")
-    n_label = _upsert(db[settings.label_collection], label_docs, key="label_npz_path")
+    # Indexes backing the server's queries.
+    coll.create_index("json_path", unique=True)
+    coll.create_index("source_file")
+    coll.create_index("category")
 
-    # Indexes that back the queries the server runs (pairing + lookups).
-    db[settings.radar_collection].create_index("npy_path", unique=True)
-    db[settings.label_collection].create_index("label_npz_path", unique=True)
-    db[settings.label_collection].create_index("matched_radar_npy")
-    db[settings.label_collection].create_index("source_file")
-
-    print(f"radar_captures : {n_radar} docs upserted "
-          f"({db[settings.radar_collection].count_documents({})} total)")
-    print(f"labels         : {n_label} docs upserted "
-          f"({db[settings.label_collection].count_documents({})} total)")
+    print(f"captures : {n} upserted ({coll.count_documents({})} total)")
     print("\nDone.")
     client.close()
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Ingest ChronoSense dataset into MongoDB.")
+    ap = argparse.ArgumentParser(description="Ingest ChronoSense vital-sign JSONs into MongoDB.")
     ap.add_argument("--dataset-root", default=None,
                     help="Path to FMCW_dataset (default: from settings/.env).")
     args = ap.parse_args()

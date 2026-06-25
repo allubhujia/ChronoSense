@@ -1,10 +1,10 @@
-"""FastAPI application: REST + WebSocket for the ChronoSense dataset.
+"""FastAPI application: REST + WebSocket for the ChronoSense vital-sign dataset.
 
 Run it with:
     uvicorn app.main:app --reload --port 8000
 
 The dataset must already be in MongoDB (see app/ingest.py). This server only
-reads from Mongo and serves it; it does not parse radar/CSV files itself.
+reads from Mongo and serves it; it does not parse radar `.bin` files itself.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from . import crud
 from .database import close_mongo_connection, connect_to_mongo
-from .schemas import Label, Pair, RadarCapture, WSCommand, WSResponse
+from .schemas import Capture, WSCommand, WSResponse
 
 
 # ── App lifespan: open/close Mongo with the server ──────────────────────────
@@ -29,8 +29,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="ChronoSense Backend",
-    description="Serves FMCW radar captures (X) and ECG/PCG heart-rate labels (Y).",
-    version="0.1.0",
+    description="Serves radar-only respiration & heartbeat for two subjects per capture.",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -44,25 +44,25 @@ async def root() -> dict:
 # `response_model=...` makes FastAPI validate and serialise each response through
 # the Pydantic schema. If a stored document doesn't match the schema, FastAPI
 # raises a server-side validation error — so these routes also exercise Pydantic.
-@app.get("/captures", response_model=list[RadarCapture])
-async def http_list_captures(limit: int = 20):
-    return await crud.list_captures(limit)
+@app.get("/captures", response_model=list[Capture])
+async def http_list_captures(limit: int = 20, category: str | None = None):
+    return await crud.list_captures(limit, category)
 
 
-@app.get("/labels", response_model=list[Label])
-async def http_list_labels(limit: int = 20):
-    return await crud.list_labels(limit)
-
-
-@app.get("/pair", response_model=Pair)
-async def http_get_pair(radar_npy: str):
-    pair = await crud.get_pair(radar_npy)
-    if pair is None:
+@app.get("/captures/{source_file}", response_model=Capture)
+async def http_get_capture(source_file: str):
+    capture = await crud.get_capture(source_file)
+    if capture is None:
         raise HTTPException(
             status_code=404,
-            detail=f"No radar capture with npy_path={radar_npy!r}",
+            detail=f"No capture with source_file={source_file!r}",
         )
-    return pair
+    return capture
+
+
+@app.get("/summary")
+async def http_summary() -> dict:
+    return await crud.summary()
 
 
 # ── WebSocket endpoint ──────────────────────────────────────────────────────
@@ -70,12 +70,12 @@ async def http_get_pair(radar_npy: str):
 async def websocket_endpoint(ws: WebSocket) -> None:
     """One persistent connection; the client sends WSCommand JSON messages.
 
-    Supported actions: ping, list_captures, list_labels, get_pair.
+    Supported actions: ping, list_captures, get_capture, summary.
     Every reply is a WSResponse envelope: {type, data, error}.
 
-    NOTE: this currently handles query traffic (backend -> client). The edge
-    ingestion direction (edge device -> backend, pushing live radar/vital data
-    to be validated and stored) will be added here as its own action/handler.
+    NOTE: this currently handles query traffic (backend -> client). A future
+    edge device pushing live vital-sign data into the backend would add its own
+    action/handler here.
     """
     await ws.accept()
     try:
@@ -101,23 +101,22 @@ async def _dispatch(ws: WebSocket, cmd: WSCommand) -> None:
         await _send(ws, WSResponse(type="pong", data={"ok": True}))
 
     elif cmd.action == "list_captures":
-        data = await crud.list_captures(cmd.limit)
+        data = await crud.list_captures(cmd.limit, cmd.category)
         await _send(ws, WSResponse(type="captures", data=data))
 
-    elif cmd.action == "list_labels":
-        data = await crud.list_labels(cmd.limit)
-        await _send(ws, WSResponse(type="labels", data=data))
-
-    elif cmd.action == "get_pair":
-        if not cmd.radar_npy:
-            await _send(ws, WSResponse(type="error", error="get_pair needs 'radar_npy'"))
+    elif cmd.action == "get_capture":
+        if not cmd.source_file:
+            await _send(ws, WSResponse(type="error", error="get_capture needs 'source_file'"))
             return
-        pair = await crud.get_pair(cmd.radar_npy)
-        if pair is None:
+        capture = await crud.get_capture(cmd.source_file)
+        if capture is None:
             await _send(ws, WSResponse(type="error",
-                                       error=f"unknown radar_npy: {cmd.radar_npy}"))
+                                       error=f"unknown source_file: {cmd.source_file}"))
             return
-        await _send(ws, WSResponse(type="pair", data=pair))
+        await _send(ws, WSResponse(type="capture", data=capture))
+
+    elif cmd.action == "summary":
+        await _send(ws, WSResponse(type="summary", data=await crud.summary()))
 
 
 async def _send(ws: WebSocket, response: WSResponse) -> None:

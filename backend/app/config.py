@@ -17,10 +17,10 @@ class Settings(BaseSettings):
     # MongoDB
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_db: str = "chronosense"
-    radar_collection: str = "radar_captures"
-    label_collection: str = "labels"
+    # One collection now: radar-only vital-sign captures (respiration + heartbeat).
+    capture_collection: str = "captures"
 
-    # Used only by the ingest script to locate the two index JSON files.
+    # Used only by the ingest script to locate the per-capture vital-sign JSONs.
     dataset_root: str = "../FMCW_dataset"
 
 

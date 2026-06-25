@@ -2,8 +2,9 @@
 
 It connects to the server's /ws endpoint and runs a short demo:
   1. ping
-  2. list a few radar captures (X)
-  3. fetch one capture + its labels (X <-> Y pairing)
+  2. dataset-wide vital-sign summary
+  3. list a few captures
+  4. fetch one capture and print both subjects' respiration + heartbeat
 
 Usage (server must be running on :8000):
     python client/ws_client.py
@@ -34,29 +35,42 @@ async def demo(url: str) -> None:
         print(">> ping")
         print("<<", await _request(ws, {"action": "ping"}), "\n")
 
-        # 2. list captures ---------------------------------------------------
+        # 2. dataset summary -------------------------------------------------
+        print(">> summary")
+        reply = await _request(ws, {"action": "summary"})
+        s = reply.get("data", {})
+        print(f"   captures: {s.get('total_captures')} | subjects: {s.get('total_subjects')}")
+        print(f"   breathing/min: avg {s.get('avg_breathing_bpm')} "
+              f"({s.get('min_breathing_bpm')}–{s.get('max_breathing_bpm')})")
+        print(f"   heart/min    : avg {s.get('avg_heart_bpm')} "
+              f"({s.get('min_heart_bpm')}–{s.get('max_heart_bpm')})\n")
+
+        # 3. list captures ---------------------------------------------------
         print(">> list_captures (limit 3)")
         reply = await _request(ws, {"action": "list_captures", "limit": 3})
         captures = reply.get("data", [])
         for c in captures:
-            print(f"   {c['source_file']}  npy={c['npy_path']}")
+            print(f"   {c['source_file']}  ({c['num_subjects_detected']} subjects)")
         print()
 
         if not captures:
             print("No captures in DB. Run the ingest script first.")
             return
 
-        # 3. get one capture + its labels -----------------------------------
-        radar_npy = captures[0]["npy_path"]
-        print(f">> get_pair  radar_npy={radar_npy}")
-        reply = await _request(ws, {"action": "get_pair", "radar_npy": radar_npy})
-        pair = reply.get("data", {})
-        labels = pair.get("labels", [])
-        print(f"   radar duration: {pair['radar']['duration_s']}s")
-        print(f"   labels paired : {len(labels)}")
-        for lab in labels:
-            print(f"     - {lab['source_file']} "
-                  f"(mean HR {lab['hr_summary']['hr_mean_bpm']} bpm)")
+        # 4. get one capture + print its vital signs -------------------------
+        source_file = captures[0]["source_file"]
+        print(f">> get_capture  source_file={source_file}")
+        reply = await _request(ws, {"action": "get_capture", "source_file": source_file})
+        capture = reply.get("data", {})
+        print(f"   duration: {capture['duration_s']}s | "
+              f"bandwidth: {capture['bandwidth_ghz']} GHz")
+        for subj in capture.get("subjects", []):
+            det = subj["detection"]
+            br = subj["respiration"]["breathing_rate_bpm"]
+            hr = subj["heartbeat"]["heart_rate_bpm"]
+            print(f"     - subject {subj['subject_index']} "
+                  f"@ {det['range_m']}m / {det['angle_deg']}°: "
+                  f"breathing {br}/min, heart {hr}/min")
 
 
 if __name__ == "__main__":
