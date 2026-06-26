@@ -1,0 +1,4 @@
+# ChronoSense Temporal RAG pipeline — only genuinely new dep is groq.
+# chromadb, fastapi, uvicorn, pymongo come from backend/requirements.txt;
+# embeddings use chromadb's built-in ONNX model (no sentence-transformers/torch).
+groq

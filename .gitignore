@@ -28,6 +28,13 @@ env/
 backend/.env
 
 # ──────────────────────────────────────────────
+# ChromaDB vector store (built locally via ingest_guidelines.py — not committed)
+# ──────────────────────────────────────────────
+chroma_db/
+*.sqlite3
+*.pickle
+
+# ──────────────────────────────────────────────
 # Datasets & processed artifacts (download/generate separately — see README)
 # ──────────────────────────────────────────────
 FMCW_dataset/
