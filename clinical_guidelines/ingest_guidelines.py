@@ -27,7 +27,10 @@ Usage (from clinical_guidelines/):
 from __future__ import annotations
 
 import argparse
+import os
 import re
+import shutil
+import tempfile
 from pathlib import Path
 
 import chromadb
@@ -37,14 +40,33 @@ import pypdf
 # ── Paths / config ──────────────────────────────────────────────────────────
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PDF_DIR = _SCRIPT_DIR / "stg_pdfs"
-_CHROMA_DIR = _SCRIPT_DIR / "chroma_db"
+# CHROMA_DIR can redirect the store off the WSL→Windows mount (where ChromaDB's
+# SQLite compaction fails on large builds) onto a native ext4 path.
+_CHROMA_DIR = Path(os.getenv("CHROMA_DIR", str(_SCRIPT_DIR / "chroma_db")))
 _COLLECTION = "indian_stg_guidelines"
 
-# Which PDFs to ingest, and the specialty tag each gets in its metadata.
-_SOURCES = [
-    {"file": "cardiology_stw.pdf", "specialty": "cardiology"},
-    {"file": "pulmonology_stw.pdf", "specialty": "pulmonology"},
-]
+# All PDFs in stg_pdfs/ are ingested automatically. The specialty tag is inferred
+# from the filename (keyword match); anything unrecognised is tagged "general".
+_SPECIALTY_KEYWORDS = {
+    "cardiology": ("cardio", "heart", "cardiac", "hf", "832ea0f4"),
+    "pulmonology": ("pulmo", "copd", "gold", "respir", "lung", "asthma"),
+}
+
+
+def infer_specialty(filename: str) -> str:
+    name = filename.lower()
+    for specialty, keywords in _SPECIALTY_KEYWORDS.items():
+        if any(k in name for k in keywords):
+            return specialty
+    return "general"
+
+
+def discover_sources() -> list[dict]:
+    """Find every PDF in stg_pdfs/ and tag each with an inferred specialty."""
+    return [
+        {"file": p.name, "specialty": infer_specialty(p.name)}
+        for p in sorted(_PDF_DIR.glob("*.pdf"))
+    ]
 
 # Chunking: clinical thresholds are short, so keep chunks tight for precise
 # retrieval, with a one-sentence overlap to preserve context across splits.
@@ -57,9 +79,18 @@ _BATCH = 100
 def extract_pages(pdf_path: Path) -> list[tuple[int, str]]:
     """Return [(page_number, text), ...] for a PDF (1-based page numbers)."""
     reader = pypdf.PdfReader(str(pdf_path))
+    if reader.is_encrypted:
+        # Try an empty owner password (common for "protected but not locked" PDFs).
+        try:
+            reader.decrypt("")
+        except Exception:
+            pass
     pages: list[tuple[int, str]] = []
     for i, page in enumerate(reader.pages, start=1):
-        pages.append((i, page.extract_text() or ""))
+        try:
+            pages.append((i, page.extract_text() or ""))
+        except Exception:
+            pages.append((i, ""))  # skip just this page
     return pages
 
 
@@ -95,6 +126,22 @@ def chunk_text(text: str, max_chars: int = _MAX_CHARS,
     return [c for c in chunks if len(c) >= 40]
 
 
+def is_reference_chunk(chunk: str) -> bool:
+    """True if a chunk looks like a bibliography / citation list rather than
+    clinical guidance. GOLD/WHO PDFs have many reference pages that otherwise
+    pollute retrieval (they match statistical query language but carry no
+    directives), so we drop them at ingest time."""
+    low = chunk.lower()
+    if "pubmed" in low or "doi.org" in low or low.count("http") >= 2:
+        return True
+    if low.count("et al") >= 2:
+        return True
+    # Journal-citation pattern like "2017; 72(2): 117-21", appearing repeatedly.
+    if len(re.findall(r"\b\d{4};\s*\d+\(\d+\)", chunk)) >= 2:
+        return True
+    return False
+
+
 def build_chunks_for_pdf(pdf_path: Path, specialty: str) -> list[dict]:
     """Extract -> clean -> chunk one PDF into records ready for ChromaDB."""
     records: list[dict] = []
@@ -103,8 +150,10 @@ def build_chunks_for_pdf(pdf_path: Path, specialty: str) -> list[dict]:
         if not cleaned:
             continue
         for idx, chunk in enumerate(chunk_text(cleaned)):
+            if is_reference_chunk(chunk):
+                continue
             records.append({
-                "id": f"{specialty}_p{page_num}_c{idx}",
+                "id": f"{pdf_path.stem}_p{page_num}_c{idx}",
                 "document": chunk,
                 "metadata": {
                     "specialty": specialty,
@@ -117,9 +166,10 @@ def build_chunks_for_pdf(pdf_path: Path, specialty: str) -> list[dict]:
 
 
 # ── ChromaDB ────────────────────────────────────────────────────────────────
-def get_client() -> chromadb.ClientAPI:
-    """Persistent ChromaDB client rooted at clinical_guidelines/chroma_db/."""
-    return chromadb.PersistentClient(path=str(_CHROMA_DIR))
+def _on_windows_mount(path: Path) -> bool:
+    """True if `path` lives on a WSL→Windows drvfs mount (/mnt/<drive>/...),
+    where ChromaDB's SQLite compaction is unreliable."""
+    return str(path).startswith("/mnt/")
 
 
 def ingest(rebuild: bool = False) -> None:
@@ -127,10 +177,20 @@ def ingest(rebuild: bool = False) -> None:
     print(f"Chroma dir  : {_CHROMA_DIR}")
     print(f"Collection  : {_COLLECTION}\n")
 
-    client = get_client()
+    # ChromaDB's SQLite store fails compaction on /mnt/c (drvfs). So when the
+    # final location is on such a mount, build into a native temp dir first and
+    # copy the finished store across at the end. Transparent to the caller.
+    final_dir = _CHROMA_DIR
+    relocate = _on_windows_mount(final_dir)
+    build_dir = Path(tempfile.mkdtemp(prefix="cs_chroma_")) if relocate else final_dir
+    if relocate:
+        print(f"Building on native FS: {build_dir}")
+        print(f"(will copy to {final_dir} when done)\n")
+
+    client = chromadb.PersistentClient(path=str(build_dir))
     embed_fn = embedding_functions.DefaultEmbeddingFunction()
 
-    if rebuild:
+    if rebuild and not relocate:
         try:
             client.delete_collection(_COLLECTION)
             print("Dropped existing collection (rebuild).")
@@ -143,14 +203,27 @@ def ingest(rebuild: bool = False) -> None:
         metadata={"description": "Indian ICMR/MoHFW STG guidelines for ChronoSense"},
     )
 
+    sources = discover_sources()
+    print(f"Discovered {len(sources)} PDF(s): "
+          f"{', '.join(s['file'] + ' [' + s['specialty'] + ']' for s in sources)}\n")
+
     total = 0
-    for src in _SOURCES:
+    for src in sources:
         pdf_path = _PDF_DIR / src["file"]
         if not pdf_path.is_file():
             print(f"[WARN] missing PDF, skipping: {pdf_path}")
             continue
 
-        records = build_chunks_for_pdf(pdf_path, src["specialty"])
+        # A single unreadable PDF (encrypted, corrupt, scanned-image-only) must
+        # not abort the whole build — skip it and keep going.
+        try:
+            records = build_chunks_for_pdf(pdf_path, src["specialty"])
+        except Exception as exc:
+            print(f"[SKIP] could not read {src['file']}: {exc}")
+            continue
+        if not records:
+            print(f"[SKIP] no extractable text in {src['file']}")
+            continue
         print(f"{src['specialty']:12s}: {len(records)} chunks from {src['file']}")
 
         # Upsert in batches so re-running is safe and memory stays bounded.
@@ -163,9 +236,22 @@ def ingest(rebuild: bool = False) -> None:
             )
         total += len(records)
 
+    stored = collection.count()
+
+    # Release the client's file handles before moving the store across.
+    del collection, client
+
+    if relocate:
+        print(f"\nCopying store {build_dir} → {final_dir} ...")
+        if final_dir.exists():
+            shutil.rmtree(final_dir, ignore_errors=True)
+        shutil.copytree(build_dir, final_dir)
+        shutil.rmtree(build_dir, ignore_errors=True)
+        print("Copy complete.")
+
     print(f"\n{'=' * 56}")
     print(f"DONE: {total} chunks in collection '{_COLLECTION}' "
-          f"({collection.count()} total stored)")
+          f"({stored} total stored)")
     print(f"{'=' * 56}")
 
 
