@@ -8,7 +8,7 @@ export default function Header() {
       <div className="mx-auto flex max-w-7xl items-center gap-8 px-6 py-3">
         <div className="flex items-center gap-2 text-xl font-bold text-blue-700">
           <RadarIcon className="h-6 w-6" />
-          ChronoSense
+          ArogyaSense
         </div>
 
         <nav className="hidden items-center gap-7 text-sm font-medium text-slate-500 md:flex">
