@@ -4,3 +4,5 @@ groq
 # Retrieval embedder: all-mpnet-base-v2 (768-dim) for higher cosine similarity.
 # Pulls in torch (CPU is fine).
 sentence-transformers
+# Observability: Prometheus metrics (request/latency/drift/Groq).
+prometheus-client

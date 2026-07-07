@@ -1,0 +1,53 @@
+# Prometheus alerting rules for ChronoSense. These fire in Prometheus (see the
+# Alerts tab at :9090) and also drive the red/green threshold panels in Grafana.
+groups:
+  - name: chronosense-api
+    rules:
+      # API latency: 95th-percentile request duration above 2s.
+      - alert: HighRequestLatency
+        expr: >
+          histogram_quantile(0.95,
+            sum by (le) (rate(chronosense_http_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency > 2s"
+          description: "95th-percentile request latency has exceeded 2 seconds for 1 minute."
+
+      # Error rate: more than 10% of requests returning 5xx.
+      - alert: HighErrorRate
+        expr: >
+          sum(rate(chronosense_http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(chronosense_http_requests_total[5m])) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "5xx error rate > 10%"
+          description: "More than 10% of requests are failing over the last 5 minutes."
+
+      # Groq slowness: 95th-percentile agent latency above 10s.
+      - alert: SlowGroqResponses
+        expr: >
+          histogram_quantile(0.95,
+            sum by (le) (rate(chronosense_groq_request_duration_seconds_bucket[5m]))
+          ) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Groq p95 latency > 10s"
+          description: "The Groq multi-agent calls are taking over 10 seconds at p95."
+
+      # Groq errors: any failed Groq calls in the last 5 minutes.
+      - alert: GroqCallFailures
+        expr: sum(rate(chronosense_groq_requests_total{status="error"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Groq API calls are failing"
+          description: "One or more Groq agent calls have errored in the last 5 minutes."

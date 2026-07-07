@@ -30,6 +30,8 @@ from backend.app.database import (
     get_database,
 )
 
+from observability.metrics import record_drift_event, setup_metrics
+
 from . import agents, config, db, pipeline, retrieval, trajectory
 
 
@@ -55,6 +57,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Prometheus: request-count + latency middleware and the /metrics endpoint.
+setup_metrics(app)
 
 
 # ── Request models ───────────────────────────────────────────────────────────
@@ -188,5 +193,12 @@ async def dashboard(evt: DriftEvent) -> dict:
             result["assessment"] = agents.run_pipeline(analysis.summary, chunks)
         except Exception as exc:  # Groq down / no key / rate-limited
             result["assessment_error"] = str(exc)
+
+    # A drift assessment just fired — record it for Prometheus, labelled by the
+    # triage level the agents assigned (or "no_agents" when the LLM was skipped).
+    triage = None
+    if result["assessment"]:
+        triage = result["assessment"].get("care_coordination", {}).get("triage_level")
+    record_drift_event(triage or ("no_agents" if not evt.run_agents else "unknown"))
 
     return result

@@ -1,0 +1,93 @@
+# ChronoSense — full stack: MongoDB + Temporal RAG API + React dashboard.
+#
+#   docker compose build           # build the api + frontend images
+#   docker compose up -d           # start mongo, api, frontend
+#   # one-time data seed (see README / commands below):
+#   docker compose exec api python -m backend.app.ingest
+#   docker compose exec api python -m temporal_rag.build_patient_vitals
+#
+# Dashboard → http://localhost:5173     API docs → http://localhost:8001/docs
+
+services:
+  # ── MongoDB: stores radar captures + built patient_vitals ──────────────────
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── API: Temporal RAG pipeline (FastAPI on :8001) ──────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    # GROQ_API_KEY (+ optional GROQ_MODEL) come from temporal_rag/.env.
+    env_file:
+      - ./temporal_rag/.env
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DB: chronosense
+      DATASET_ROOT: /app/FMCW_dataset
+    volumes:
+      # Dataset for the one-time capture ingest. (ChromaDB is baked into the
+      # image, so it is not mounted here.)
+      - ./FMCW_dataset:/app/FMCW_dataset:ro
+    ports:
+      - "8001:8001"
+
+  # ── Frontend: React dashboard served by nginx, proxying /api → api ─────────
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+
+  # ── Prometheus: scrapes the api's /metrics and evaluates alert rules ───────
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    depends_on:
+      - api
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  # ── Grafana: dashboards (line/bar/stat/alert panels), auto-provisioned ─────
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+
+volumes:
+  mongo_data:
+  prometheus_data:
+  grafana_data:

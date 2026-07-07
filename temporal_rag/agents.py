@@ -20,6 +20,17 @@ from functools import lru_cache
 
 from . import config
 
+# Prometheus timing for Groq calls. Import-safe: falls back to a no-op context
+# manager if the observability package/prometheus_client isn't available.
+try:
+    from observability.metrics import track_groq
+except Exception:  # pragma: no cover
+    import contextlib
+
+    @contextlib.contextmanager
+    def track_groq(agent: str):
+        yield
+
 
 @lru_cache(maxsize=1)
 def _client():
@@ -66,7 +77,9 @@ class Agent:
     json_mode: bool = False
 
     def run(self, user_prompt: str) -> str:
-        return _chat(self.system_prompt, user_prompt, self.temperature, self.json_mode)
+        # Time the Groq round-trip, labelled by this agent's name.
+        with track_groq(self.name):
+            return _chat(self.system_prompt, user_prompt, self.temperature, self.json_mode)
 
 
 CLINICAL_ANALYST = Agent(

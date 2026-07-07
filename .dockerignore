@@ -1,0 +1,22 @@
+# Keep the API build context small and clean.
+.venv/
+**/__pycache__/
+**/*.pyc
+.git/
+.gitignore
+
+# Frontend has its own image/build context.
+frontend/node_modules/
+frontend/dist/
+
+# Large dataset is bind-mounted at runtime, not baked.
+# (clinical_guidelines/chroma_db IS baked into the image — do not ignore it.)
+FMCW_dataset/
+
+# Secrets are injected via env_file / environment, never copied into the image.
+**/.env
+
+# Docs / misc
+*.md
+digital_processing/
+backend/client/
