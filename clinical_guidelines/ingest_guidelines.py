@@ -44,6 +44,9 @@ _PDF_DIR = _SCRIPT_DIR / "stg_pdfs"
 # SQLite compaction fails on large builds) onto a native ext4 path.
 _CHROMA_DIR = Path(os.getenv("CHROMA_DIR", str(_SCRIPT_DIR / "chroma_db")))
 _COLLECTION = "indian_stg_guidelines"
+# Must match temporal_rag/config.py EMBED_MODEL_NAME. all-mpnet-base-v2 (768-dim)
+# yields higher on-topic cosine similarity than the MiniLM default.
+_EMBED_MODEL = os.getenv("EMBED_MODEL_NAME", "all-mpnet-base-v2")
 
 # All PDFs in stg_pdfs/ are ingested automatically. The specialty tag is inferred
 # from the filename (keyword match); anything unrecognised is tagged "general".
@@ -188,7 +191,9 @@ def ingest(rebuild: bool = False) -> None:
         print(f"(will copy to {final_dir} when done)\n")
 
     client = chromadb.PersistentClient(path=str(build_dir))
-    embed_fn = embedding_functions.DefaultEmbeddingFunction()
+    embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name=_EMBED_MODEL
+    )
 
     if rebuild and not relocate:
         try:

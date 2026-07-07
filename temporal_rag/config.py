@@ -23,6 +23,11 @@ CHROMA_DIR = Path(os.getenv("CHROMA_DIR", str(PROJECT_ROOT / "clinical_guideline
 COLLECTION_NAME = "indian_stg_guidelines"
 TOP_K = 3
 
+# Embedding model. all-mpnet-base-v2 (768-dim) gives markedly higher on-topic
+# cosine similarity than the old MiniLM default (~0.6-0.75 vs ~0.4-0.5). Must
+# match the model used at ingest time — mixing models makes cosine meaningless.
+EMBED_MODEL_NAME = os.getenv("EMBED_MODEL_NAME", "all-mpnet-base-v2")
+
 # ── MongoDB (connection managed by backend/app/database.py) ──────────────────
 VITALS_COLLECTION = "patient_vitals"
 PATIENTS_COLLECTION = "patients"   # optional demographics: {patient_id, condition, age}
@@ -41,11 +46,14 @@ SHAP_FIELDS = {
 
 
 def get_embedding_function():
-    """Return the same DefaultEmbeddingFunction used by clinical_guidelines/ingest_guidelines.py.
+    """Return the SentenceTransformer embedder (all-mpnet-base-v2) used to build
+    the ChromaDB store in clinical_guidelines/ingest_guidelines.py.
 
     Must match the embedder used at ingest time — mixing models would make
     cosine similarity meaningless.
     """
     from chromadb.utils import embedding_functions
 
-    return embedding_functions.DefaultEmbeddingFunction()
+    return embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name=EMBED_MODEL_NAME
+    )
