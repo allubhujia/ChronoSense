@@ -21,6 +21,8 @@ from __future__ import annotations
 import contextlib
 import time
 
+from starlette.responses import Response
+
 try:
     from prometheus_client import (
         CONTENT_TYPE_LATEST,
@@ -74,8 +76,6 @@ def setup_metrics(app) -> None:
     if not _ENABLED:
         return
 
-    from starlette.responses import Response
-
     @app.middleware("http")
     async def _prometheus_middleware(request, call_next):
         # Don't measure the scrape endpoint itself.
@@ -98,7 +98,7 @@ def setup_metrics(app) -> None:
         return response
 
     @app.get("/metrics")
-    def metrics() -> "Response":
+    def metrics() -> Response:
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 

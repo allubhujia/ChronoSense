@@ -64,7 +64,7 @@
       },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "value" },
       "targets": [
-        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum(rate(chronosense_http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(chronosense_http_requests_total[5m])), 1)", "instant": true }
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "(sum(rate(chronosense_http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(chronosense_http_requests_total[5m])), 1)) or vector(0)", "instant": true }
       ]
     },
     {

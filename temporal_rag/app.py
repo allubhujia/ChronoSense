@@ -38,6 +38,14 @@ from . import agents, config, db, pipeline, retrieval, trajectory
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_to_mongo()
+    # Warm up retrieval at startup: the first ChromaDB query otherwise pays a
+    # ~30-60s one-time cost loading the mpnet embedding model. Doing it here
+    # moves that cost into boot, so /retrieve and /dashboard respond instantly.
+    try:
+        retrieval.get_collection().query(query_texts=["warmup"], n_results=1)
+        print("[startup] retrieval model warmed up.")
+    except Exception as exc:  # ChromaDB not built yet — don't block startup
+        print(f"[startup] retrieval warmup skipped: {exc}")
     yield
     await close_mongo_connection()
 
@@ -75,6 +83,18 @@ class DriftEvent(BaseModel):
 class RetrieveRequest(BaseModel):
     query: str
     k: int = config.TOP_K
+
+
+class ChunkFeedback(BaseModel):
+    """A doctor's 👍/👎 on whether one retrieved chunk was clinically relevant."""
+
+    chunk_id: str
+    rating: str = Field(pattern="^(up|down)$")
+    patient_id: str
+    triage_level: str | None = None
+    similarity_at_retrieval: float | None = None
+    source_document: str | None = None
+    page: int | None = None
 
 
 # ── Core endpoints ───────────────────────────────────────────────────────────
@@ -116,6 +136,26 @@ async def retrieve(req: RetrieveRequest) -> dict:
         return {"query": req.query, "chunks": retrieval.retrieve(req.query, k=req.k)}
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/feedback")
+async def chunk_feedback(fb: ChunkFeedback) -> dict:
+    """Store a doctor's relevance rating for one retrieved guideline chunk.
+
+    One rating per (chunk_id, patient_id) pair — clicking again overwrites, so
+    a misclick is corrected by simply clicking the other thumb. The standalone
+    temporal_rag/update_chunk_weights.py script later turns these ratings into
+    retrieval weights.
+    """
+    database = get_database()
+    doc = fb.model_dump()
+    doc["rated_at"] = datetime.utcnow()
+    await database[config.FEEDBACK_COLLECTION].update_one(
+        {"chunk_id": fb.chunk_id, "patient_id": fb.patient_id},
+        {"$set": doc},
+        upsert=True,
+    )
+    return {"status": "recorded", "chunk_id": fb.chunk_id, "rating": fb.rating}
 
 
 # ── Dashboard surface (consumed by the React UI) ─────────────────────────────
@@ -202,3 +242,4 @@ async def dashboard(evt: DriftEvent) -> dict:
     record_drift_event(triage or ("no_agents" if not evt.run_agents else "unknown"))
 
     return result
+    

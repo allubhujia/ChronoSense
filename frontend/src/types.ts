@@ -38,6 +38,7 @@ export interface TrajectoryAnalysis {
 }
 
 export interface GuidelineChunk {
+  chunk_id: string;
   text: string;
   source_document: string | null;
   specialty: string | null;
@@ -45,6 +46,20 @@ export interface GuidelineChunk {
   chunk_index: number | null;
   distance: number;
   similarity: number;
+  weight: number;
+  weighted_similarity: number;
+}
+
+export type ChunkRating = "up" | "down";
+
+export interface ChunkFeedbackPayload {
+  chunk_id: string;
+  rating: ChunkRating;
+  patient_id: string;
+  triage_level?: string | null;
+  similarity_at_retrieval?: number | null;
+  source_document?: string | null;
+  page?: number | null;
 }
 
 export type TriageLevel =

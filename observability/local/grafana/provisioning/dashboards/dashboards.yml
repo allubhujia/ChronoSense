@@ -1,0 +1,16 @@
+# ── LOCAL Grafana dashboard provider (no Docker) ─────────────────────────────
+# Loads the SAME dashboard JSON as Docker mode from its absolute path on disk,
+# so there's only one dashboard definition to maintain.
+apiVersion: 1
+
+providers:
+  - name: ChronoSense
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 10
+    options:
+      path: /mnt/c/VIT_CHENNAI/Computer_science/Internship/ChronoSense/observability/grafana/dashboards
+      foldersFromFilesStructure: false

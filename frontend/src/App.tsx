@@ -9,6 +9,7 @@ import DriftGauge from "./components/DriftGauge";
 import TrajectoryChart from "./components/TrajectoryChart";
 import ShapBars from "./components/ShapBars";
 import AssessmentPanel from "./components/AssessmentPanel";
+import GuidelinePanel from "./components/GuidelinePanel";
 import { RefreshIcon } from "./components/icons";
 
 export default function App() {
@@ -158,6 +159,14 @@ export default function App() {
               </div>
               <ShapBars latest={data.latest} />
             </div>
+
+            <GuidelinePanel
+              chunks={data.retrieved_chunks}
+              patientId={data.patient_id}
+              triageLevel={
+                data.assessment?.care_coordination?.triage_level ?? null
+              }
+            />
 
             <AssessmentPanel
               assessment={data.assessment}

@@ -37,3 +37,9 @@ sudo systemctl status mongod
 
 
 #---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+docker compose build        # first time (slow: torch + mpnet)
+docker compose up -d        # start ALL services together
+# one-time data seed:
+docker compose exec api python -m backend.app.ingest
+docker compose exec api python -m temporal_rag.build_patient_vitals

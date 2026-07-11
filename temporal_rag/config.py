@@ -33,6 +33,13 @@ VITALS_COLLECTION = "patient_vitals"
 PATIENTS_COLLECTION = "patients"   # optional demographics: {patient_id, condition, age}
 TRAJECTORY_DAYS = 7
 
+# ── Doctor feedback loop (chunk relevance ratings → retrieval weights) ───────
+FEEDBACK_COLLECTION = "chunk_feedback"       # one doc per 👍/👎 on a chunk
+CHUNK_WEIGHTS_COLLECTION = "chunk_weights"   # {chunk_id, weight} written by the
+                                             #   update_chunk_weights.py script
+WEIGHT_MIN, WEIGHT_MAX = 0.3, 1.5            # clamp so no chunk dies or dominates
+RETRIEVAL_OVERFETCH = 4                      # fetch k*4 candidates, rerank, cut to k
+
 # ── Groq (multi-agent LLM) ───────────────────────────────────────────────────
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")

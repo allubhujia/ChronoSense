@@ -1,0 +1,2 @@
+# Local Prometheus/Grafana runtime state — never commit.
+.data/

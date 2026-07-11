@@ -1,0 +1,24 @@
+# ── LOCAL Prometheus config (no Docker) ──────────────────────────────────────
+# Scrapes the API on localhost:8001 instead of the Docker service name "api".
+# The Docker version lives in ../prometheus/prometheus.yml (targets api:8001).
+#
+# Run with:
+#   prometheus --config.file=observability/local/prometheus.local.yml
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+# Reuse the SAME alert rules as Docker mode (shared, single source of truth).
+rule_files:
+  - /mnt/c/VIT_CHENNAI/Computer_science/Internship/ChronoSense/observability/prometheus/alerts.yml
+
+scrape_configs:
+  # The Temporal RAG API (uvicorn on the host) exposes /metrics.
+  - job_name: chronosense-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:8001"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

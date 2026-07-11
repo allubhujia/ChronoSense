@@ -1,4 +1,4 @@
-import type { DashboardResponse, Patient } from "./types";
+import type { ChunkFeedbackPayload, DashboardResponse, Patient } from "./types";
 
 // All requests go through Vite's /api proxy → FastAPI on :8001 (see vite.config.ts).
 const BASE = "/api";
@@ -33,4 +33,16 @@ export async function fetchDashboard(
     body: JSON.stringify({ patient_id: patientId, run_agents: runAgents }),
   });
   return jsonOrThrow<DashboardResponse>(res);
+}
+
+/** Doctor's 👍/👎 on one retrieved guideline chunk. Re-clicking overwrites. */
+export async function sendChunkFeedback(
+  payload: ChunkFeedbackPayload
+): Promise<{ status: string }> {
+  const res = await fetch(`${BASE}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return jsonOrThrow<{ status: string }>(res);
 }
