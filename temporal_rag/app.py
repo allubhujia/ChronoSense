@@ -30,9 +30,13 @@ from backend.app.database import (
     get_database,
 )
 
-from observability.metrics import record_drift_event, setup_metrics
+from observability.metrics import (
+    record_drift_event,
+    record_evaluation,
+    setup_metrics,
+)
 
-from . import agents, config, db, pipeline, retrieval, trajectory
+from . import agents, config, db, evaluation, feedback, pipeline, retrieval, trajectory
 
 
 @asynccontextmanager
@@ -140,12 +144,15 @@ async def retrieve(req: RetrieveRequest) -> dict:
 
 @app.post("/feedback")
 async def chunk_feedback(fb: ChunkFeedback) -> dict:
-    """Store a doctor's relevance rating for one retrieved guideline chunk.
+    """Store a doctor's relevance rating for one retrieved guideline chunk AND
+    immediately fold it into the chunk's retrieval weight — no manual script.
 
     One rating per (chunk_id, patient_id) pair — clicking again overwrites, so
-    a misclick is corrected by simply clicking the other thumb. The standalone
-    temporal_rag/update_chunk_weights.py script later turns these ratings into
-    retrieval weights.
+    a misclick is corrected by clicking the other thumb. After storing, the
+    chunk's weight is recomputed from all its ratings and (once it has
+    FEEDBACK_MIN_RATINGS) written to chunk_weights; retrieval picks it up on the
+    next query. The bulk temporal_rag/update_chunk_weights.py script remains as
+    an optional way to review/apply everything at once.
     """
     database = get_database()
     doc = fb.model_dump()
@@ -155,7 +162,18 @@ async def chunk_feedback(fb: ChunkFeedback) -> dict:
         {"$set": doc},
         upsert=True,
     )
-    return {"status": "recorded", "chunk_id": fb.chunk_id, "rating": fb.rating}
+
+    # Automatic learning: recompute this chunk's weight now, then invalidate the
+    # retrieval weight cache so the change takes effect on the very next query.
+    new_weight = await feedback.recompute_chunk_weight(database, fb.chunk_id)
+    retrieval.refresh_weights()
+
+    return {
+        "status": "recorded",
+        "chunk_id": fb.chunk_id,
+        "rating": fb.rating,
+        "new_weight": new_weight,  # None until the chunk has enough ratings
+    }
 
 
 # ── Dashboard surface (consumed by the React UI) ─────────────────────────────
@@ -226,6 +244,7 @@ async def dashboard(evt: DriftEvent) -> dict:
         "retrieved_chunks": chunks,
         "assessment": None,
         "assessment_error": None,
+        "evaluation": None,
     }
 
     if evt.run_agents:
@@ -233,6 +252,21 @@ async def dashboard(evt: DriftEvent) -> dict:
             result["assessment"] = agents.run_pipeline(analysis.summary, chunks)
         except Exception as exc:  # Groq down / no key / rate-limited
             result["assessment_error"] = str(exc)
+
+        # Evaluate the brief: citation accuracy (deterministic) + groundedness
+        # (LLM-judge). Best-effort — never let it break the response.
+        if result["assessment"]:
+            try:
+                ev = evaluation.evaluate(
+                    result["assessment"], chunks, summary=analysis.summary
+                )
+                result["evaluation"] = ev
+                record_evaluation(
+                    groundedness=(ev.get("groundedness") or {}).get("groundedness"),
+                    citation_accuracy=(ev.get("citation_accuracy") or {}).get("score"),
+                )
+            except Exception as exc:
+                result["evaluation"] = {"error": str(exc)}
 
     # A drift assessment just fired — record it for Prometheus, labelled by the
     # triage level the agents assigned (or "no_agents" when the LLM was skipped).

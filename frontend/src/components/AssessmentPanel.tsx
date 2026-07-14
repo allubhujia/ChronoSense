@@ -1,4 +1,4 @@
-import type { Assessment, GuidelineChunk } from "../types";
+import type { Assessment, Evaluation, GuidelineChunk } from "../types";
 import Card from "./Card";
 import { CheckIcon, ChatIcon, SparkleIcon, SendIcon } from "./icons";
 
@@ -6,10 +6,64 @@ interface Props {
   assessment: Assessment | null;
   error: string | null;
   chunks: GuidelineChunk[];
+  evaluation: Evaluation | null;
   onRetry: () => void;
 }
 
-export default function AssessmentPanel({ assessment, error, chunks, onRetry }: Props) {
+/** Colour a 0-1 quality score: green ≥0.8, amber ≥0.5, red below. */
+function scoreClasses(v: number | null | undefined): string {
+  if (v == null) return "bg-slate-100 text-slate-500";
+  if (v >= 0.8) return "bg-emerald-100 text-emerald-700";
+  if (v >= 0.5) return "bg-amber-100 text-amber-700";
+  return "bg-red-100 text-red-700";
+}
+
+function EvalStrip({ evaluation }: { evaluation: Evaluation | null }) {
+  if (!evaluation || evaluation.error) return null;
+  const g = evaluation.groundedness;
+  const c = evaluation.citation_accuracy;
+  const groundVal = g && g.error == null ? g.groundedness ?? null : null;
+  const citeVal = c ? c.score : null;
+
+  return (
+    <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200/60">
+      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Output quality
+      </span>
+
+      <span
+        className={`rounded-md px-2.5 py-1 text-xs font-semibold ${scoreClasses(groundVal)}`}
+        title="Fraction of the rationale's claims supported by the retrieved guidelines (LLM-judge)"
+      >
+        Groundedness: {groundVal != null ? `${Math.round(groundVal * 100)}%` : "—"}
+        {g?.verdict ? ` · ${g.verdict.replace(/_/g, " ")}` : ""}
+      </span>
+
+      <span
+        className={`rounded-md px-2.5 py-1 text-xs font-semibold ${scoreClasses(citeVal)}`}
+        title="Fraction of the agent's citations that point at an actually-retrieved chunk"
+      >
+        Citations: {c ? `${c.valid}/${c.total}` : "—"}
+        {citeVal != null ? ` (${Math.round(citeVal * 100)}%)` : ""}
+      </span>
+
+      {g?.unsupported_claims && g.unsupported_claims.length > 0 && (
+        <span className="text-xs text-red-600">
+          ⚠ {g.unsupported_claims.length} unsupported claim
+          {g.unsupported_claims.length > 1 ? "s" : ""}
+        </span>
+      )}
+    </div>
+  );
+}
+
+export default function AssessmentPanel({
+  assessment,
+  error,
+  chunks,
+  evaluation,
+  onRetry,
+}: Props) {
   const cc = assessment?.care_coordination;
 
   // Citations: prefer the agent's own list, else derive from retrieved chunks.
@@ -42,7 +96,9 @@ export default function AssessmentPanel({ assessment, error, chunks, onRetry }: 
       ) : !assessment ? (
         <p className="text-slate-400">No assessment yet.</p>
       ) : (
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+        <>
+          <EvalStrip evaluation={evaluation} />
+          <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
           {/* Left: rationale + actions */}
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -94,7 +150,8 @@ export default function AssessmentPanel({ assessment, error, chunks, onRetry }: 
               </button>
             </div>
           )}
-        </div>
+          </div>
+        </>
       )}
     </Card>
   );

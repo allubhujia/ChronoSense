@@ -84,6 +84,26 @@ export interface Assessment {
   care_coordination: CareCoordination;
 }
 
+export interface CitationAccuracy {
+  score: number | null;
+  valid: number;
+  total: number;
+  details: { citation: string; valid: boolean }[];
+}
+
+export interface Groundedness {
+  groundedness?: number;
+  verdict?: string;
+  unsupported_claims?: string[];
+  error?: string;
+}
+
+export interface Evaluation {
+  citation_accuracy?: CitationAccuracy;
+  groundedness?: Groundedness;
+  error?: string;
+}
+
 export interface DashboardResponse {
   patient_id: string;
   demographics: Patient;
@@ -96,4 +116,5 @@ export interface DashboardResponse {
   retrieved_chunks: GuidelineChunk[];
   assessment: Assessment | null;
   assessment_error: string | null;
+  evaluation: Evaluation | null;
 }

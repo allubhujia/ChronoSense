@@ -173,6 +173,56 @@
       "targets": [
         { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (agent) (chronosense_groq_requests_total)", "legendFormat": "{{agent}}", "instant": true }
       ]
+    },
+    {
+      "id": 10,
+      "type": "gauge",
+      "title": "LLM Groundedness  (rationale supported by guidelines)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "orange", "value": 0.5 },
+            { "color": "green", "value": 0.8 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "showThresholdLabels": false, "showThresholdMarkers": true },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "chronosense_groundedness_score", "instant": true }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "gauge",
+      "title": "Citation Accuracy  (citations that map to a retrieved chunk)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "orange", "value": 0.5 },
+            { "color": "green", "value": 0.8 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "showThresholdLabels": false, "showThresholdMarkers": true },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "chronosense_citation_accuracy", "instant": true }
+      ]
     }
   ]
 }

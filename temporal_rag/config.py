@@ -39,6 +39,7 @@ CHUNK_WEIGHTS_COLLECTION = "chunk_weights"   # {chunk_id, weight} written by the
                                              #   update_chunk_weights.py script
 WEIGHT_MIN, WEIGHT_MAX = 0.3, 1.5            # clamp so no chunk dies or dominates
 RETRIEVAL_OVERFETCH = 4                      # fetch k*4 candidates, rerank, cut to k
+FEEDBACK_MIN_RATINGS = 2                     # ratings before a chunk's weight auto-moves
 
 # ── Groq (multi-agent LLM) ───────────────────────────────────────────────────
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")

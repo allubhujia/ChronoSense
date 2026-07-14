@@ -27,6 +27,7 @@ try:
     from prometheus_client import (
         CONTENT_TYPE_LATEST,
         Counter,
+        Gauge,
         Histogram,
         generate_latest,
     )
@@ -70,6 +71,18 @@ if _ENABLED:
         ["agent", "status"],
     )
 
+    # 5 — LLM/RAG output quality: latest groundedness + citation accuracy (0-1).
+    GROUNDEDNESS = Gauge(
+        "chronosense_groundedness_score",
+        "Latest LLM groundedness score (0-1): fraction of rationale claims "
+        "supported by the retrieved guideline chunks.",
+    )
+    CITATION_ACCURACY = Gauge(
+        "chronosense_citation_accuracy",
+        "Latest citation accuracy (0-1): fraction of the agent's citations that "
+        "point at an actually-retrieved chunk.",
+    )
+
 
 def setup_metrics(app) -> None:
     """Attach the request-timing middleware and the /metrics endpoint."""
@@ -106,6 +119,17 @@ def record_drift_event(triage: str | None = None) -> None:
     """Increment the drift-event counter (labelled by triage level)."""
     if _ENABLED:
         DRIFT_EVENTS.labels(triage or "unknown").inc()
+
+
+def record_evaluation(groundedness: float | None = None,
+                      citation_accuracy: float | None = None) -> None:
+    """Record the latest LLM/RAG output-quality scores (0-1)."""
+    if not _ENABLED:
+        return
+    if groundedness is not None:
+        GROUNDEDNESS.set(groundedness)
+    if citation_accuracy is not None:
+        CITATION_ACCURACY.set(citation_accuracy)
 
 
 @contextlib.contextmanager

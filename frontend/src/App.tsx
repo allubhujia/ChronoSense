@@ -172,6 +172,7 @@ export default function App() {
               assessment={data.assessment}
               error={data.assessment_error}
               chunks={data.retrieved_chunks}
+              evaluation={data.evaluation}
               onRetry={() => void load(selected)}
             />
           </>

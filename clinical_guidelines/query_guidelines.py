@@ -13,7 +13,7 @@ Usage (from clinical_guidelines/, after ingest_guidelines.py has run):
     python query_guidelines.py "respiratory rate threshold for distress"
     python query_guidelines.py --breathing 32 --heart 110
 """
-
+    
 from __future__ import annotations
 
 import argparse
